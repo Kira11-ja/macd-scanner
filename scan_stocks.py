@@ -111,7 +111,7 @@ def get_nasdaq_symbols() -> list[str]:
 # =========================================================
 def get_excluded_symbols() -> set[str]:
     sheet_id = os.environ.get("SHEET_ID")
-    sheet_name = os.environ.get("SHEET_NAME", "Sheet1")
+    sheet_name = os.environ.get("SHEET_NAME") or "Sheet1"
 
     if not sheet_id:
         print("ℹ️ 未設定 SHEET_ID，略過手動排除名單。")
