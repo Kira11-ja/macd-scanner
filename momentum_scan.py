@@ -378,7 +378,7 @@ def liquidity_loose(df_merged: pd.DataFrame) -> pd.DataFrame:
         except Exception:
             continue
 
-    df_filtered = df_merged.applymap(
+    df_filtered = df_merged.map(
         lambda x: x if isinstance(x, str) and x in valid_codes else (x if not isinstance(x, str) else None)
     )
 
@@ -425,7 +425,7 @@ def liquidity_strict(df_merged: pd.DataFrame):
         except Exception:
             fail_codes.append(code)
 
-    df_filtered = df_merged.applymap(
+    df_filtered = df_merged.map(
         lambda x: x
         if isinstance(x, str) and x.replace("$", "") in valid_codes
         else (x if not isinstance(x, str) else None)
