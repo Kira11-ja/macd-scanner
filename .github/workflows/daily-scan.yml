@@ -1,17 +1,17 @@
-name: Daily MACD Stock Scan
+name: Daily Stock Scans
 
 on:
   schedule:
     # 每天 UTC 12:00 = 台灣時間 (UTC+8) 晚上 8:00
     - cron: "0 12 * * *"
-  # 也允許在 GitHub 網頁上手動點擊執行 (Actions -> Daily MACD Stock Scan -> Run workflow)
+  # 也允許在 GitHub 網頁上手動點擊執行 (Actions -> Daily Stock Scans -> Run workflow)
   workflow_dispatch: {}
 
 permissions:
   contents: write
 
 jobs:
-  scan:
+  macd-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -37,5 +37,44 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add results/
-          git diff --quiet --cached || git commit -m "Daily scan results $(date -u +'%Y-%m-%d')"
-          git push
+          git diff --quiet --cached || git commit -m "MACD scan results $(date -u +'%Y-%m-%d')"
+          # momentum-scan 這個 job 也會同時在推送結果，用 rebase 重試避免衝突
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push && break
+            echo "推送失敗，5 秒後重試 ($i/5)..."
+            sleep 5
+          done
+
+  momentum-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scan
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          SHEET_NAME: ${{ secrets.SHEET_NAME }}
+        run: python momentum_scan.py
+
+      - name: Commit and push results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add results/
+          git diff --quiet --cached || git commit -m "Momentum scan results $(date -u +'%Y-%m-%d')"
+          # macd-scan 這個 job 也會同時在推送結果，用 rebase 重試避免衝突
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push && break
+            echo "推送失敗，5 秒後重試 ($i/5)..."
+            sleep 5
+          done
