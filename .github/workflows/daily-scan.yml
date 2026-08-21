@@ -78,3 +78,30 @@ jobs:
             echo "推送失敗，5 秒後重試 ($i/5)..."
             sleep 5
           done
+
+  combine-results:
+    needs: [macd-scan, momentum-scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pandas openpyxl
+
+      - name: Combine MACD + Momentum results into one Excel
+        run: python combine_results.py
+
+      - name: Commit and push combined results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add results/
+          git diff --quiet --cached || git commit -m "Combined scan results $(date -u +'%Y-%m-%d')"
+          git push
