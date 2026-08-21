@@ -417,8 +417,9 @@ def main():
 
     df_final = liquidity_filter(results)
 
-    latest_path = os.path.join(RESULTS_DIR, "latest.xlsx")
-    dated_path = os.path.join(RESULTS_DIR, f"{TODAY_STR}.xlsx")
+    # 檔名加上 macd_ 前綴，避免跟 combine_results.py 產出的合併檔（latest.xlsx / 日期.xlsx）撞名
+    latest_path = os.path.join(RESULTS_DIR, "macd_latest.xlsx")
+    dated_path = os.path.join(RESULTS_DIR, f"macd_{TODAY_STR}.xlsx")
 
     df_final.to_excel(latest_path, index=False)
     df_final.to_excel(dated_path, index=False)

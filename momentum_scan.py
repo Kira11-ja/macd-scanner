@@ -9,8 +9,8 @@
   - 拿掉 Colab 專屬的 /content/ 路徑
   - Google 試算表 ID／分頁名稱改從環境變數讀取，不寫死在程式碼裡
   - 輸出檔案固定存到 results/ 資料夾，並同時保留 latest 版與帶日期的歷史版
-  - 使用者要求保留「流動性複篩」的兩種版本（寬鬆版：近三天任一天符合；
-    嚴格版：近三天每一天都要符合，並額外輸出失敗代碼清單）
+  - 流動性複篩只保留「嚴格版」（近三天每一天都要符合量能條件），
+    寬鬆版已依使用者要求移除
 
 流程：
   1. 抓取 NASDAQ 全市場股票代號清單（含 GitHub 備援來源）
@@ -18,7 +18,7 @@
   3. 強勢股篩選（均線多頭排列 + 型態 A/B/C + 量能 + 站穩 EMA52）
   4. 持續走升篩選（均線多頭排列 + 強勢收盤）
   5. 合併去重（強勢優先）
-  6. 流動性複篩：寬鬆版 + 嚴格版（兩版都保留，各自輸出）
+  6. 流動性複篩：嚴格版（近三天每一天都要符合，並輸出失敗代碼清單）
 """
 
 import io
@@ -355,48 +355,8 @@ def merge_dedupe(df_strong: pd.DataFrame, df_rising: pd.DataFrame) -> pd.DataFra
 
 
 # =========================================================
-# Step 6a. 流動性複篩：寬鬆版（近三天任一天符合即可）
-# =========================================================
-def liquidity_loose(df_merged: pd.DataFrame) -> pd.DataFrame:
-    all_codes = df_merged.values.ravel()
-    all_codes = [str(code).strip() for code in all_codes if isinstance(code, str)]
-
-    valid_codes = []
-    for code in all_codes:
-        try:
-            ticker = yf.Ticker(code)
-            hist = ticker.history(period="5d")
-            if len(hist) < 3:
-                continue
-            close = hist["Close"][-3:]
-            volume = hist["Volume"][-3:]
-            if close.isnull().any() or volume.isnull().any():
-                continue
-            amount = close * volume
-            if ((volume >= 1_000_000) | (amount >= 30_000_000)).any():
-                valid_codes.append(code)
-        except Exception:
-            continue
-
-    df_filtered = df_merged.map(
-        lambda x: x if isinstance(x, str) and x in valid_codes else (x if not isinstance(x, str) else None)
-    )
-
-    df_compacted = pd.DataFrame()
-    for col in df_filtered.columns:
-        compacted = df_filtered[col].dropna().reset_index(drop=True)
-        df_compacted[col] = compacted
-
-    max_len = df_compacted.apply(len).max() if len(df_compacted.columns) else 0
-    for col in df_compacted.columns:
-        df_compacted[col] = df_compacted[col].reindex(range(max_len))
-
-    print(f"✅ 寬鬆版流動性複篩完成，合格 {len(valid_codes)} 檔。")
-    return df_compacted
-
-
-# =========================================================
-# Step 6b. 流動性複篩：嚴格版（近三天每一天都要符合）
+# Step 6. 流動性複篩：嚴格版（近三天每一天都要符合）
+# 使用者已確認只需要保留嚴格版，寬鬆版邏輯已移除。
 # =========================================================
 def liquidity_strict(df_merged: pd.DataFrame):
     all_codes = df_merged.values.ravel()
@@ -481,14 +441,10 @@ def main():
     df_merged = merge_dedupe(df_strong, df_rising)
     save_both(df_merged, "momentum_merged")
 
-    # Step 6a 寬鬆版
-    df_loose = liquidity_loose(df_merged)
-    save_both(df_loose, "momentum_final_loose")
-
-    # Step 6b 嚴格版
+    # Step 6 嚴格版流動性複篩（唯一保留的最終版本）
     df_strict, df_fail = liquidity_strict(df_merged)
-    save_both(df_strict, "momentum_final_strict")
-    save_both(df_fail, "momentum_final_strict_failcodes")
+    save_both(df_strict, "momentum")
+    save_both(df_fail, "momentum_failcodes")
 
     print("\n🎉 momentum_scan.py 全部完成！")
 
