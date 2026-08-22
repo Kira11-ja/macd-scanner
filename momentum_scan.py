@@ -212,11 +212,15 @@ def classify_stock(df_hist: pd.DataFrame):
 
 
 # =========================================================
-# Step 3. 強勢股篩選（批次分組 + 逐檔查詢 + 停頓控流，維持原邏輯）
+# Step 3. 強勢股篩選
+# 改成批次下載（一次跟 Yahoo 要 100 檔的資料，而不是一檔一檔單獨查），
+# 大幅減少 HTTP 請求數，降低被 Yahoo Finance 流量限制擋掉、漏抓的機率。
+# 篩選門檻、classify_stock() 判斷邏輯完全不變；auto_adjust=True 對應原本
+# yf.Ticker(code).history() 的預設行為，確保股價數值跟原本一致。
 # =========================================================
 def scan_strong(symbols: list[str]) -> pd.DataFrame:
     batch_size = 100
-    sleep_sec = 10
+    sleep_sec = 2
 
     result_strong = []
     result_start_stable = []
@@ -224,48 +228,60 @@ def scan_strong(symbols: list[str]) -> pd.DataFrame:
     result_start = []
     fail_list = []
 
+    def classify_and_store(code, df_hist):
+        cat = classify_stock(df_hist)
+        if cat == "強勢+站穩+大量" and code not in result_strong:
+            result_strong.append(code)
+        elif cat == "開漲+站穩" and code not in result_start_stable:
+            result_start_stable.append(code)
+        elif cat == "開漲+大量" and code not in result_start_volume:
+            result_start_volume.append(code)
+        elif cat == "開漲" and code not in result_start:
+            result_start.append(code)
+
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i : i + batch_size]
         print(f"\n🚀 處理第 {i + 1} ~ {i + len(batch)} 檔（共 {len(symbols)}）...")
 
+        try:
+            data = yf.download(
+                batch,
+                period="200d",
+                group_by="ticker",
+                threads=True,
+                progress=False,
+                auto_adjust=True,
+            )
+        except Exception:
+            data = pd.DataFrame()
+
         tmp_fail = []
         for code in tqdm(batch, desc="檢查中"):
             try:
-                df_hist = yf.Ticker(code).history(period="200d")
-                cat = classify_stock(df_hist)
+                df_hist = pd.DataFrame()
+                if len(batch) == 1:
+                    df_hist = data
+                elif not data.empty and code in data.columns.levels[0]:
+                    df_hist = data[code]
+
+                if df_hist.empty or df_hist["Close"].isnull().all():
+                    df_hist = yf.Ticker(code).history(period="200d")  # 批次沒抓到的補抓一次
+
+                classify_and_store(code, df_hist)
             except Exception:
                 tmp_fail.append(code)
                 continue
-
-            if cat == "強勢+站穩+大量" and code not in result_strong:
-                result_strong.append(code)
-            elif cat == "開漲+站穩" and code not in result_start_stable:
-                result_start_stable.append(code)
-            elif cat == "開漲+大量" and code not in result_start_volume:
-                result_start_volume.append(code)
-            elif cat == "開漲" and code not in result_start:
-                result_start.append(code)
 
         if tmp_fail:
             print(f"⚠️ 批次失敗 {len(tmp_fail)} 檔，進行補抓...")
             for code in tmp_fail:
                 try:
                     df_hist = yf.Ticker(code).history(period="200d")
-                    cat = classify_stock(df_hist)
+                    classify_and_store(code, df_hist)
                 except Exception:
                     fail_list.append(code)
                     continue
 
-                if cat == "強勢+站穩+大量" and code not in result_strong:
-                    result_strong.append(code)
-                elif cat == "開漲+站穩" and code not in result_start_stable:
-                    result_start_stable.append(code)
-                elif cat == "開漲+大量" and code not in result_start_volume:
-                    result_start_volume.append(code)
-                elif cat == "開漲" and code not in result_start:
-                    result_start.append(code)
-
-        print(f"✅ 批次完成，休息 {sleep_sec} 秒以控流…")
         time.sleep(sleep_sec)
 
     df_out = pd.DataFrame(
@@ -282,6 +298,8 @@ def scan_strong(symbols: list[str]) -> pd.DataFrame:
 
 # =========================================================
 # Step 4. 持續走升篩選
+# 同樣改成批次下載。auto_adjust=False 對應原本
+# yf.download(symbol, auto_adjust=False) 的設定，股價數值跟原本一致。
 # =========================================================
 def scan_rising(symbols: list[str]) -> pd.DataFrame:
     all_symbols = list(set(symbols))
@@ -289,32 +307,56 @@ def scan_rising(symbols: list[str]) -> pd.DataFrame:
 
     final_list = []
     error_count = 0
+    batch_size = 100
 
-    for symbol in tqdm(all_symbols, desc="檢查持續走升（多頭排列 + 強勢收盤）"):
+    for i in tqdm(range(0, len(all_symbols), batch_size), desc="批次檢查持續走升（多頭排列 + 強勢收盤）"):
+        batch = all_symbols[i : i + batch_size]
+
         try:
-            df = yf.download(symbol, period="200d", auto_adjust=False, progress=False)
-            if df.empty or len(df) < 60:
-                continue
-
-            close = df["Close"]
-            ema5 = close.ewm(span=5).mean()
-            ema10 = close.ewm(span=10).mean()
-            ema20 = close.ewm(span=20).mean()
-
-            close_last5 = close[-5:]
-            ema5_last5 = ema5[-5:]
-            ema10_last3 = ema10[-3:]
-            ema20_last3 = ema20[-3:]
-            ema5_last3 = ema5[-3:]
-
-            cond1 = ((ema5_last3 > ema10_last3) & (ema10_last3 > ema20_last3)).all()
-            cond2 = (close_last5 > (ema5_last5 * 1.01)).all()
-
-            if cond1 and cond2:
-                final_list.append(symbol)
+            data = yf.download(
+                batch,
+                period="200d",
+                group_by="ticker",
+                threads=True,
+                progress=False,
+                auto_adjust=False,
+            )
         except Exception:
-            error_count += 1
-            continue
+            data = pd.DataFrame()
+
+        for symbol in batch:
+            try:
+                df = pd.DataFrame()
+                if len(batch) == 1:
+                    df = data
+                elif not data.empty and symbol in data.columns.levels[0]:
+                    df = data[symbol]
+
+                if df.empty or df["Close"].isnull().all():
+                    df = yf.download(symbol, period="200d", auto_adjust=False, progress=False)  # 補抓
+
+                if df.empty or len(df) < 60:
+                    continue
+
+                close = df["Close"]
+                ema5 = close.ewm(span=5).mean()
+                ema10 = close.ewm(span=10).mean()
+                ema20 = close.ewm(span=20).mean()
+
+                close_last5 = close[-5:]
+                ema5_last5 = ema5[-5:]
+                ema10_last3 = ema10[-3:]
+                ema20_last3 = ema20[-3:]
+                ema5_last3 = ema5[-3:]
+
+                cond1 = ((ema5_last3 > ema10_last3) & (ema10_last3 > ema20_last3)).all()
+                cond2 = (close_last5 > (ema5_last5 * 1.01)).all()
+
+                if cond1 and cond2:
+                    final_list.append(symbol)
+            except Exception:
+                error_count += 1
+                continue
 
     print(f"✅ 檢查完成，共略過 {error_count} 檔錯誤")
     return pd.DataFrame({"持續走升": final_list})
@@ -357,6 +399,8 @@ def merge_dedupe(df_strong: pd.DataFrame, df_rising: pd.DataFrame) -> pd.DataFra
 # =========================================================
 # Step 6. 流動性複篩：嚴格版（近三天每一天都要符合）
 # 使用者已確認只需要保留嚴格版，寬鬆版邏輯已移除。
+# 這裡候選股票數量通常已經不多（合併去重後大約幾百檔），但一樣改成批次
+# 下載，跟前兩個階段的作法一致，避免這一步也因為逐檔查詢被 Yahoo 擋掉。
 # =========================================================
 def liquidity_strict(df_merged: pd.DataFrame):
     all_codes = df_merged.values.ravel()
@@ -364,26 +408,49 @@ def liquidity_strict(df_merged: pd.DataFrame):
 
     valid_codes = []
     fail_codes = []
+    batch_size = 100
 
-    for code in all_codes:
+    for i in range(0, len(all_codes), batch_size):
+        batch = all_codes[i : i + batch_size]
+
         try:
-            ticker = yf.Ticker(code)
-            hist = ticker.history(period="5d")
-            if hist.empty or len(hist) < 3:
-                fail_codes.append(code)
-                continue
-            close = hist["Close"][-3:]
-            volume = hist["Volume"][-3:]
-            if close.isnull().any() or volume.isnull().any():
-                fail_codes.append(code)
-                continue
-            amount = close * volume
-            if (volume >= 1_000_000).all() and (amount >= 30_000_000).all():
-                valid_codes.append(code)
-            else:
-                fail_codes.append(code)
+            data = yf.download(
+                batch,
+                period="5d",
+                group_by="ticker",
+                threads=True,
+                progress=False,
+                auto_adjust=True,
+            )
         except Exception:
-            fail_codes.append(code)
+            data = pd.DataFrame()
+
+        for code in batch:
+            try:
+                hist = pd.DataFrame()
+                if len(batch) == 1:
+                    hist = data
+                elif not data.empty and code in data.columns.levels[0]:
+                    hist = data[code]
+
+                if hist.empty or hist["Close"].isnull().all():
+                    hist = yf.Ticker(code).history(period="5d")  # 補抓
+
+                if hist.empty or len(hist) < 3:
+                    fail_codes.append(code)
+                    continue
+                close = hist["Close"][-3:]
+                volume = hist["Volume"][-3:]
+                if close.isnull().any() or volume.isnull().any():
+                    fail_codes.append(code)
+                    continue
+                amount = close * volume
+                if (volume >= 1_000_000).all() and (amount >= 30_000_000).all():
+                    valid_codes.append(code)
+                else:
+                    fail_codes.append(code)
+            except Exception:
+                fail_codes.append(code)
 
     df_filtered = df_merged.map(
         lambda x: x
