@@ -1,9 +1,12 @@
 name: Daily Stock Scans
-
+ 
 on:
   schedule:
-    # 每天 UTC 12:00 = 台灣時間 (UTC+8) 晚上 8:00
-    - cron: "0 12 * * *"
+    # 每天 UTC 11:47 = 台灣時間 (UTC+8) 晚上 19:47 左右觸發。
+    # 故意避開整點（分鐘數 0）：GitHub Actions 的排程觸發在整點時段最容易
+    # 因為全球一堆 repo 排在同一時間而塞車延遲，改成非整點的分鐘數可以
+    # 降低被排隊延後的機率（GitHub 官方文件也建議這樣做）。
+    - cron: "47 11 * * *"
   # 也允許在 GitHub 網頁上手動點擊執行 (Actions -> Daily Stock Scans -> Run workflow)
   workflow_dispatch: {}
 
